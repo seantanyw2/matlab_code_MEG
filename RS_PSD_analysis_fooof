@@ -1,0 +1,240 @@
+% adding paths 
+addpath (genpath('/imaging/rowe/users/lh01/osl/'));
+addpath ('/home/st03/Downloads/spm');
+addpath ('/home/st03/Trial_MEG_analysis/FTD_ZOL_trial/');
+addpath ('/home/st03/Downloads/fooof_mat-main/fooof_mat/');
+
+% open MATLAB loops on HPC 
+P = cbupool(12);
+P.SubmitArguments = [P.SubmitArguments ' --exclusive'];
+parpool(P,12);     % R2014a and later
+
+% setting paths 
+data_dir = '/imaging/rowe/Sean_RS_analysis/FTD_MEM_sean_RS_analysis/FTD_MEM_patients_simplified';
+files = dir(fullfile(data_dir, '*.mat'));
+
+% Output directory for results
+output_dir = fullfile('/imaging/rowe/Sean_RS_analysis/FTD_MEM_sean_RS_analysis/', 'PSD_results_FTD_MEM_patients_simplified');
+if ~exist(output_dir, 'dir')
+    mkdir(output_dir);
+end
+
+parfor i = 1:numel(files)
+    
+    % Load in file 
+    D = spm_eeg_load(fullfile(data_dir, files(i).name));
+
+    % bad channels percentage
+    bad_chans = D.badchannels;                    
+    n_bad_chans = numel(bad_chans);               
+    n_total_chans = D.nchannels;                  
+    perc_bad_chans = (n_bad_chans / n_total_chans) * 100;
+
+    %bad channels only for magnetometers and gradiometers 
+    bad_chans_meg = D.indchantype('MEGMAG','BAD');
+    n_bad_chans_meg = numel(bad_chans_meg);
+    bad_chans_grad = D.indchantype('MEGPLANAR','BAD');
+    n_bad_chans_grad = numel(bad_chans_grad);
+    n_bad_chans_meg_grad = n_bad_chans_meg + n_bad_chans_grad;
+    
+    megmag = D.indchantype('MEGMAG');
+    meggrad = D.indchantype('MEGPLANAR');
+    n_total_meg_grad = numel(megmag) + numel(meggrad);
+    
+    perc_bad_chans_meg_grad = (n_bad_chans_meg_grad / n_total_meg_grad) * 100;
+    
+    % bad trials
+    bad_trials = D.badtrials;                     
+    n_bad_trials = numel(find(bad_trials));       
+    n_total_trials = D.ntrials;                   
+    perc_bad_trials = (n_bad_trials / n_total_trials) * 100;
+    
+    % Select good channels 
+    chans1 = D.indchantype('MEGMAG','GOOD');
+    chans2 = D.indchantype('MEGPLANAR','GOOD');
+
+    % Remove bad trials
+    g1_magnet = D(chans1,:,:);
+    g1_magnet(:, :, D.badtrials) = [];
+    g2_grad = D(chans2, :, :) ;
+    g2_grad(:, :, D.badtrials) = [];
+
+    % Estimate PSD with pwelch
+    p1_magnet = []; p2_grad = []; fP = [];
+    for e = 1:size(g1_magnet,3)
+      [p1_magnet(e,:,:),fP] = pwelch(g1_magnet(:,:,e)',500,250,1000,D.fsample);
+      [p2_grad(e,:,:),fP]   = pwelch(g2_grad(:,:,e)',500,250,1000,D.fsample);
+    end
+
+    % Average PSD across epochs
+    p1_magnet_raw = squeeze(mean(p1_magnet,1)); 
+    p1_magnet_trans = p1_magnet_raw';
+    p2_grad_raw = squeeze(mean(p2_grad,1)); 
+    p2_grad_trans = p2_grad_raw';
+
+    % Normalise PSDs
+    p1_magnet_norm = p1_magnet_trans./sum(p1_magnet_trans,2);
+    p2_grad_norm   = p2_grad_trans./sum(p2_grad_trans,2);
+
+    % Define bands
+    locAlpha = find(fP >= 8 & fP <= 12);
+    locBeta  = find(fP > 12 & fP <= 30);
+
+    % Alpha & Beta power
+    mean_alpha_magnet = mean(sum(p1_magnet_norm(:,locAlpha),2));
+    mean_beta_magnet  = mean(sum(p1_magnet_norm(:,locBeta),2));
+    mean_alpha_grad   = mean(sum(p2_grad_norm(:,locAlpha),2));
+    mean_beta_grad    = mean(sum(p2_grad_norm(:,locBeta),2));
+
+    % Alpha peak frequency (per subject max channel)
+    [alphaPeakVal_magnet, alphaPeakIdx_magnet] = max(p1_magnet_norm(:,locAlpha),[],2);
+    alphaPeakFreq_magnet = fP(locAlpha(alphaPeakIdx_magnet));
+    [alphaMaxVal_magnet_subject, chanIdx] = max(alphaPeakVal_magnet);
+    alphaMaxFreq_magnet_subject = alphaPeakFreq_magnet(chanIdx);
+
+    [alphaPeakVal_grad, alphaPeakIdx_grad] = max(p2_grad_norm(:,locAlpha),[],2);
+    alphaPeakFreq_grad = fP(locAlpha(alphaPeakIdx_grad));
+    [alphaMaxVal_grad_subject, chanIdx] = max(alphaPeakVal_grad);
+    alphaMaxFreq_grad_subject = alphaPeakFreq_grad(chanIdx);
+
+    % Run FOOOF on normalised values
+    freqs = fP';
+    f_range = [1, 30];
+    settings = struct();  
+
+    mean_psd_magnet_norm = mean(p1_magnet_norm,1)
+    fooof_results_magnet = fooof(freqs, mean_psd_magnet_norm, f_range, settings);
+    offset_magnet = fooof_results_magnet.aperiodic_params(1);
+    exp_magnet    = fooof_results_magnet.aperiodic_params(2);
+    aperiodic_fit_magnet = offset_magnet - log10(freqs.^exp_magnet);
+    fooof_error_magnet = fooof_results_magnet.error;
+    fooof_r_squared_magnet = fooof_results_magnet.r_squared;
+
+
+    mean_psd_grad_norm = mean(p2_grad_norm,1)
+    fooof_results_grad = fooof(freqs, mean_psd_grad_norm, f_range, settings);
+    offset_grad = fooof_results_grad.aperiodic_params(1);
+    exp_grad    = fooof_results_grad.aperiodic_params(2);
+    aperiodic_fit_grad = offset_grad - log10(freqs.^exp_grad);
+    fooof_error_grad = fooof_results_grad.error;
+    fooof_r_squared_grad = fooof_results_grad.r_squared;
+
+    %% Simplified periodic extraction with safe preallocation
+    % Magnetometers
+    peaks_magnet = fooof_results_magnet.peak_params;
+    CF_alpha_magnet = NaN; PW_alpha_magnet = NaN; BW_alpha_magnet = NaN;
+    CF_beta_magnet  = NaN; PW_beta_magnet  = NaN; BW_beta_magnet  = NaN;
+
+    alpha_idx = peaks_magnet(:,1) >= 6 & peaks_magnet(:,1) <= 12;
+    alpha_peaks = peaks_magnet(alpha_idx,:);
+    if ~isempty(alpha_peaks)
+        [~,max_idx] = max(alpha_peaks(:,2));
+        main_alpha = alpha_peaks(max_idx,:);
+        CF_alpha_magnet = main_alpha(1);
+        PW_alpha_magnet = main_alpha(2);
+        BW_alpha_magnet = main_alpha(3);
+    end
+
+    beta_idx = peaks_magnet(:,1) > 12 & peaks_magnet(:,1) <= 30;
+    beta_peaks = peaks_magnet(beta_idx,:);
+    if ~isempty(beta_peaks)
+        [~,max_idx] = max(beta_peaks(:,2));
+        main_beta = beta_peaks(max_idx,:);
+        CF_beta_magnet = main_beta(1);
+        PW_beta_magnet = main_beta(2);
+        BW_beta_magnet = main_beta(3);
+    end
+
+    % Gradiometers
+    peaks_grad = fooof_results_grad.peak_params;
+    CF_alpha_grad = NaN; PW_alpha_grad = NaN; BW_alpha_grad = NaN;
+    CF_beta_grad  = NaN; PW_beta_grad  = NaN; BW_beta_grad  = NaN;
+
+    alpha_idx = peaks_grad(:,1) >= 6 & peaks_grad(:,1) <= 12;
+    alpha_peaks = peaks_grad(alpha_idx,:);
+    if ~isempty(alpha_peaks)
+        [~,max_idx] = max(alpha_peaks(:,2));
+        main_alpha = alpha_peaks(max_idx,:);
+        CF_alpha_grad = main_alpha(1);
+        PW_alpha_grad = main_alpha(2);
+        BW_alpha_grad = main_alpha(3);
+    end
+
+    beta_idx = peaks_grad(:,1) > 12 & peaks_grad(:,1) <= 30;
+    beta_peaks = peaks_grad(beta_idx,:);
+    if ~isempty(beta_peaks)
+        [~,max_idx] = max(beta_peaks(:,2));
+        main_beta = beta_peaks(max_idx,:);
+        CF_beta_grad = main_beta(1);
+        PW_beta_grad = main_beta(2);
+        BW_beta_grad = main_beta(3);
+    end
+
+    % Save results
+    [~, subj_name, ~] = fileparts(files(i).name);
+    fpath = fullfile(output_dir, ['PSD_' subj_name '.mat']);
+    results = matfile(fpath, 'Writable', true);
+
+    % QC metrics
+    results.n_bad_chans = n_bad_chans
+    results.perc_bad_chans = perc_bad_chans
+    results.n_bad_trials = n_bad_trials
+    results.perc_bad_trials = perc_bad_trials
+    results.perc_bad_chans_meg_grad = perc_bad_chans_meg_grad
+
+    % PSDs
+    results.fP = fP;
+    results.freqs = freqs; 
+    results.p1_magnet_raw = p1_magnet_raw;
+    results.p1_magnet_norm = p1_magnet_norm;
+    results.p2_grad_raw = p2_grad_raw;
+    results.p2_grad_norm = p2_grad_norm;
+
+    % Band powers and peaks
+    results.mean_alpha_magnet = mean_alpha_magnet;
+    results.mean_beta_magnet = mean_beta_magnet;
+    results.mean_alpha_grad = mean_alpha_grad;
+    results.mean_beta_grad = mean_beta_grad;
+    results.alphaMaxVal_magnet_subject = alphaMaxVal_magnet_subject;
+    results.alphaMaxFreq_magnet_subject = alphaMaxFreq_magnet_subject;
+    results.alphaMaxVal_grad_subject = alphaMaxVal_grad_subject;
+    results.alphaMaxFreq_grad_subject = alphaMaxFreq_grad_subject;
+    results.peaks_magnet = peaks_magnet;
+    results.peaks_grad = peaks_grad;
+
+    % Fooof outputs
+    results.fooof_magnet = fooof_results_magnet;
+    results.offset_magnet = offset_magnet;
+    results.exp_magnet = exp_magnet;
+    results.aperiodic_fit_magnet = aperiodic_fit_magnet;
+    results.fooof_error_magnet = fooof_error_magnet;
+    results.fooof_r_squared_magnet = fooof_r_squared_magnet;
+    
+    results.mean_psd_magnet_norm = mean_psd_magnet_norm;
+    results.mean_psd_grad_norm  = mean_psd_grad_norm;
+
+    results.fooof_grad = fooof_results_grad;
+    results.offset_grad = offset_grad;
+    results.exp_grad = exp_grad;
+    results.aperiodic_fit_grad = aperiodic_fit_grad;
+    results.fooof_error_grad = fooof_error_grad;
+    results.fooof_r_squared_grad = fooof_r_squared_grad;
+
+    % Periodic parameters
+    results.CF_alpha_magnet = CF_alpha_magnet;
+    results.PW_alpha_magnet = PW_alpha_magnet;
+    results.BW_alpha_magnet = BW_alpha_magnet;
+    results.CF_beta_magnet = CF_beta_magnet;
+    results.PW_beta_magnet = PW_beta_magnet;
+    results.BW_beta_magnet = BW_beta_magnet;
+
+    results.CF_alpha_grad = CF_alpha_grad;
+    results.PW_alpha_grad = PW_alpha_grad;
+    results.BW_alpha_grad = BW_alpha_grad;
+    results.CF_beta_grad = CF_beta_grad;
+    results.PW_beta_grad = PW_beta_grad;
+    results.BW_beta_grad = BW_beta_grad;
+end    
+
+% Close pool
+delete(gcp('nocreate'))
