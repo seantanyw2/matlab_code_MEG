@@ -233,10 +233,10 @@ parfor i = 1:numel(files)
     %Alpha peak frequency from each subjects mean psd with the 6-12Hz range
 
     [alphaPeakVal_magnet_mean_range, alphaPeakIdx_magnet_mean_range] = max(mean_psd_magnet_norm(:,locAlphaRange),[],2);
-    alphaPeakFreq_magnet_mean_range = fP(locAlpha(alphaPeakIdx_magnet_mean_range));
+    alphaPeakFreq_magnet_mean_range = fP(locAlphaRange(alphaPeakIdx_magnet_mean_range));
 
     [alphaPeakVal_grad_mean_range, alphaPeakIdx_grad_mean_range] = max(mean_psd_grad_norm(:,locAlphaRange),[],2);
-    alphaPeakFreq_grad_mean_range = fP(locAlpha(alphaPeakIdx_grad_mean_range));
+    alphaPeakFreq_grad_mean_range = fP(locAlphaRange(alphaPeakIdx_grad_mean_range));
 
     % Calculating manual alpha power above the aperiodic fit in 6-12 Hz , and
     % also finding maximums
