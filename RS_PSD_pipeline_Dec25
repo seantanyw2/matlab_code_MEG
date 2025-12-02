@@ -314,7 +314,7 @@ parfor i = 1:numel(files)
     alpha_peaks_range = peaks_grad(alpha_idx_range,:);
     if ~isempty(alpha_peaks_range)
         [~,max_idx_range] = max(alpha_peaks_range(:,2));
-        main_alpha_range = alpha_peaks_range(max_idx,:);
+        main_alpha_range = alpha_peaks_range(max_idx_range,:);
         CF_alpha_grad_range = main_alpha_range(1);
         PW_alpha_grad_range = main_alpha_range(2);
         BW_alpha_grad_range = main_alpha_range(3);
